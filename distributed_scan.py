@@ -1,78 +1,130 @@
 #!flask/bin/python
 from flask import Flask, jsonify, request
 import random
-import re
 import os
 import string
 import subprocess
 import json
+import validator
+import xmltodict
+import parser
 
 app = Flask(__name__)
+validator = validator.Validator()
+parser = parser.PortScanResultParser()
 
-def validate_ports(ports):
-    for port in ports:
-        if validate_port(port) == False:
-            return False
-    return True
+@app.route('/masscan', methods=['POST'])
+def masscan():
 
-def validate_port(port):
-    return type(port) == int
-
-
-@app.route('/scan', methods=['POST'])
-def port_scans():
-
-    content = request.get_json(silent=True)
-    
-    if 'secret' not in content or content['secret'] != '':
-        return jsonify({'error':'bad_secret'})
-
-    fn = 'masscan_{0}.json'.format(''.join(random.choice(string.ascii_letters) for i in range(8)))
-    command = "masscan "
-
-    if 'host' in content:
-        if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", content['host']) == None:   
-            return jsonify({'error':'bad_host'})
+    try:
+        if os.path.exists('masscan.lock'):
+            return jsonify({"error": "Scan already running"})
         else:
-            command += content['host']  
+            os.system('touch masscan.lock')
 
-    elif 'cidr' in content:
-        if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$", content['cidr']) == None:
-            return jsonify({'error':'bad_cidr'})
+        content = request.get_json(silent=True)
+
+        valid = validator.validate_request(content)
+        if valid is not None:
+            os.remove('masscan.lock')
+            return valid
+
+        fn = 'masscan_{0}.json'.format(''.join(random.choice(string.ascii_letters) for i in range(8)))
+        command = "masscan "
+
+        if 'host' in content:
+            command += content['host']
         else:
             command += content['cidr']
-    else:
-        return jsonify({'error':'missing_hosts'})
 
-    command += ' -p '
+        command += ' -p '
 
-    if 'start_port' in content and 'end_port' in content:
-        if validate_port(content['start_port']) == False or validate_port(content['end_port']) == False:
-            return jsonify({'error':'bad_port'})
-        else:
-            command += '{0}-{1}'.format(content['start_port'],content['end_port'])
-    elif 'ports' in content:
-        if validate_ports(content['ports']) == False:
-            return jsonify({'error':'bad_port'})
+        if 'start_port' in content and 'end_port' in content:
+            command += '{0}-{1}'.format(content['start_port'], content['end_port'])
         else:
             command += ','.join([str(i) for i in content['ports']])
-    else:
-        return jsonify({'error':'missing_ports'})
 
-    command += ' -oJ {0} --rate=100'.format(fn)
+        command += ' -oJ {0} --rate=100'.format(fn)
 
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
-    process.wait()
-    results = open(fn,'r').read()
-    os.remove(fn)
-    if results != '':
-        try:
-            return(jsonify(json.loads(results[:-4] + ']')))
-        except:
-            return(jsonify({'error':"bad_results_json"}))
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process.wait()
+        results = open(fn, 'r').read()
+        os.remove(fn)
+        json_data = json.loads(results[:-4] + ']')
 
-    else: 
-       return jsonify({})
+        if results != '':
+            try:
+                os.remove('masscan.lock')
+                return (jsonify(parser.parse_masscan_results(json_data)))
+            except:
+                os.remove('masscan.lock')
+                return (jsonify({'error': "bad_results_json"}))
+
+        else:
+            return jsonify({})
+
+    except Exception as e:
+        os.remove('nmap.lock')
+        return jsonify({"error": e})
+
+
+@app.route('/nmap', methods=['POST'])
+def nmap():
+
+    try:
+        if os.path.exists('nmap.lock'):
+            return jsonify({"error": "Scan already running"})
+        else:
+            os.system('touch nmap.lock')
+
+        content = request.get_json(silent=True)
+
+        valid = validator.validate_request(content)
+        if valid is not None:
+            os.remove('nmap.lock')
+            return valid
+
+        fn = 'nmap_{0}.xml'.format(''.join(random.choice(string.ascii_letters) for i in range(8)))
+        command = "nmap "
+
+        if 'host' in content:
+            command += content['host']
+        else:
+            command += content['cidr']
+
+        command += ' -p '
+
+        if 'start_port' in content and 'end_port' in content:
+            command += '{0}-{1}'.format(content['start_port'], content['end_port'])
+        else:
+            command += ','.join([str(i) for i in content['ports']])
+
+        command += ' -oX {0} -T3 -Pn'.format(fn)
+
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process.wait()
+        results = open(fn, 'r').read()
+        os.remove(fn)
+        if results != '':
+            try:
+                return (jsonify(parser.parse_nmap_results(xmltodict.parse(results))))
+            except:
+                os.remove('nmap.lock')
+                return (jsonify({'error': "bad_results_json"}))
+
+        else:
+            os.remove('nmap.lock')
+            return jsonify({})
+
+    except Exception as e:
+        os.remove('nmap.lock')
+        return jsonify({"error":e})
+
+
+@app.route('/status', methods=['GET'])
+def get_status(self):
+    return jsonify({'masscan': True, 'nmap': True})
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
