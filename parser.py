@@ -6,11 +6,15 @@ class PortScanResultParser:
     def parse_nmap_results(self, data):
         results = {}
         for host in data['nmaprun']['host']:
-            for port in host['ports']['port']:
-                if port['state']['@state'] == 'open':
-                    if host['address']['@addr'] not in results:
-                        results[host['address']['@addr']] = []
-                    results[host['address']['@addr']].append(port['@portid'])
+            if type(host['ports']['port']) == list:
+                for port in host['ports']['port']:
+                    if port['state']['@state'] == 'open':
+                        if host['address']['@addr'] not in results:
+                            results[host['address']['@addr']] = []
+                        results[host['address']['@addr']].append(port['@portid'])
+            else:
+                if host['ports']['port']['state']['@state'] == 'open':
+                    results[host['address']['@addr']] = [host['ports']['port']['@portid']]
 
         return results
 
