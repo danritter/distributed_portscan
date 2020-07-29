@@ -107,6 +107,7 @@ def nmap():
         os.remove(fn)
         if results != '':
             try:
+                os.remove('nmap.lock')
                 return (jsonify(parser.parse_nmap_results(xmltodict.parse(results))))
             except:
                 os.remove('nmap.lock')
